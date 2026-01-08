@@ -24,6 +24,12 @@ mod cortex_source_mask;
 #[cfg(feature = "cortex-m-source-masking")]
 pub use cortex_source_mask::*;
 
+// Cortex-R52 backend
+#[cfg(feature = "r52-backend")]
+mod r52;
+#[cfg(feature = "r52-backend")]
+pub use r52::*;
+
 #[cfg(feature = "riscv")]
 pub mod riscv_common;
 

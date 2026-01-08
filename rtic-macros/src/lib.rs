@@ -13,6 +13,7 @@ macro_rules! with_backend {
         #[cfg(any(
             feature = "cortex-m-source-masking",
             feature = "cortex-m-basepri",
+            feature = "r52-backend",
             feature = "test-template",
             feature = "riscv-esp32c3",
             feature = "riscv-esp32c6",
@@ -117,6 +118,7 @@ with_backend! {
 #[cfg(not(any(
     feature = "cortex-m-source-masking",
     feature = "cortex-m-basepri",
+    feature = "r52-backend",
     feature = "test-template",
     feature = "riscv-esp32c3",
     feature = "riscv-esp32c6",

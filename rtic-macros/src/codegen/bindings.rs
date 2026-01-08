@@ -1,6 +1,7 @@
 #[cfg(not(any(
     feature = "cortex-m-source-masking",
     feature = "cortex-m-basepri",
+    feature = "r52-backend",
     feature = "test-template",
     feature = "riscv-esp32c3",
     feature = "riscv-esp32c6",
@@ -11,11 +12,17 @@ compile_error!("No backend selected");
 #[cfg(any(feature = "cortex-m-source-masking", feature = "cortex-m-basepri"))]
 pub use cortex::*;
 
+#[cfg(feature = "r52-backend")]
+pub use r52::*;
+
 #[cfg(feature = "test-template")]
 pub use template::*;
 
 #[cfg(any(feature = "cortex-m-source-masking", feature = "cortex-m-basepri"))]
 mod cortex;
+
+#[cfg(feature = "r52-backend")]
+mod r52;
 
 #[cfg(feature = "test-template")]
 mod template;

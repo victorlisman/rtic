@@ -36,6 +36,7 @@ default = []
 # list of supported codegen backends
 cortex-m-source-masking = []
 cortex-m-basepri = []
+r52-backend = []
 riscv-esp32c3 = []
 riscv-esp32c6 = []
 # riscv-clic = []
