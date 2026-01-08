@@ -79,6 +79,9 @@ pub mod rp235x;
 #[cfg(feature = "imxrt")]
 pub mod imxrt;
 
+#[cfg(feature = "r52_virtual_timer")]
+pub mod r52;
+
 #[cfg(any(
     feature = "nrf52805",
     feature = "nrf52810",

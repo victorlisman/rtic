@@ -1,28 +1,20 @@
-// MINIMAL monotonic implementation for r52 port
+//! [`Monotonic`](rtic_time::Monotonic) implementation for Cortex-R52 virtual timer.
 
+/// Common definitions and traits for using the R52 monotonic.
 pub mod prelude {
     #[cfg(feature = "r52_virtual_timer")]
-    pub use create::r52_virtual_timer;
+    pub use crate::r52_virtual_timer;
 
     pub use crate::Monotonic;
     pub use fugit::{self, ExtU64, ExtU64Ceil};
 }
 
+#[cfg(feature = "r52_virtual_timer")]
+use aarch32_cpu::generic_timer::{El1VirtualTimer, GenericTimer};
 use portable_atomic::{AtomicU64, Ordering};
-use rtic_time::{
-    half_period_counter::calculate_now,
-    timer_queue::{TimerQueue, TimerQueueBackend},
-};
+use rtic_time::timer_queue::{TimerQueue, TimerQueueBackend};
 
 //pac ???
-
-mod _generated {
-    #![allow(dead_code)]
-    #![allow(unused_imports)]
-    #![allow(non_snake_case)]
-
-    include!(concat!(env!("OUT_DIR"), "/_generated.rs"));
-}
 
 #[doc(hidden)]
 #[macro_export]
@@ -41,6 +33,7 @@ macro_rules! __internal_create_r52_timer_interrupt {
 #[macro_export]
 macro_rules! __internal_create_r52_timer_struct {
     ($name:ident, $mono_backend:ident, $timer:ident, $tick_rate_hz:expr) => {
+        /// A `Monotonic` based on the Cortex-R52 virtual timer.
         pub struct $name;
 
         impl $name {
@@ -63,19 +56,33 @@ macro_rules! __internal_create_r52_timer_struct {
                 { $tick_rate_hz },
             >;
         }
-            
+
         $crate::rtic_time::impl_embedded_hal_delay_fugit!($name);
         $crate::rtic_time::impl_embedded_hal_async_delay_fugit!($name);
     };
 }
 
-/// VIRTUAL TIMER based monotonic 
+/// Create a virtual timer based monotonic and register the interrupt for it.
+///
+/// # Arguments
+///
+/// * `name` - The name that the monotonic type will have.
+/// * `interrupt` - The interrupt symbol name used by the application.
+/// * `tick_rate_hz` - The tick rate of the timer.
 #[cfg(feature = "r52_virtual_timer")]
 #[macro_export]
 macro_rules! r52_virtual_timer {
+    ($name:ident, $interrupt:ident, $tick_rate_hz:expr) => {
+        $crate::__internal_create_r52_timer_struct!(
+            $name,
+            VirtualTimerBackend,
+            $interrupt,
+            $tick_rate_hz
+        );
+    };
     ($name:ident, $tick_rate_hz:expr) => {
-        $crate::__internal_create_r52_timer_struct!($name, VirtualTimerBackend, PLACE, $tick_rate_hz);
-    }
+        $crate::r52_virtual_timer!($name, VirtualTimer, $tick_rate_hz);
+    };
 }
 
 macro_rules! make_timer {
@@ -84,60 +91,109 @@ macro_rules! make_timer {
             #[cfg_attr(docsrs, doc(cfg($($doc)*)))]
         )?
 
+        /// struct
         pub struct $backend_name;
 
         //pac??
 
         static $overflow: AtomicU64 = AtomicU64::new(0);
         static $tq: TimerQueue<$backend_name> = TimerQueue::new();
+        static TICKS_PER_TICK: AtomicU64 = AtomicU64::new(0);
 
+        /// RTIC backend
         impl $backend_name {
-            // TODO: Timer impl
+            /// start
+            pub fn _start(tim_clock_hz: u32, tick_rate_hz: u32) {
+                let timer_hz = if tim_clock_hz == 0 {
+                    unsafe { El1VirtualTimer::new().frequency_hz() as u32 }
+                } else {
+                    tim_clock_hz
+                };
+                assert!(tick_rate_hz > 0, "tick rate must be non-zero");
+                assert!(
+                    (timer_hz % tick_rate_hz) == 0,
+                    "tick rate must divide timer frequency"
+                );
+                let ticks_per_tick = (timer_hz / tick_rate_hz) as u64;
+                assert!(ticks_per_tick > 0, "invalid tick scale");
+                TICKS_PER_TICK.store(ticks_per_tick, Ordering::SeqCst);
 
-            pub fn _start() {
-                unimplemented!();
+                $tq.initialize(Self {});
+                $overflow.store(0, Ordering::SeqCst);
+
+                let mut vt = unsafe { El1VirtualTimer::new() };
+                vt.enable(true);
+                vt.interrupt_mask(false);
+                let now = vt.counter();
+                vt.counter_compare_set(now.wrapping_add(ticks_per_tick));
             }
-
-
         }
 
         impl TimerQueueBackend for $backend_name {
-            // TODO
+            type Ticks = u64;
 
-            fn now() {
-                unipmlemented!();
+            fn now() -> Self::Ticks {
+                let ticks_per_tick = TICKS_PER_TICK.load(Ordering::Relaxed);
+                assert!(ticks_per_tick > 0, "monotonic not started");
+                let raw = unsafe { El1VirtualTimer::new().counter() };
+                raw / ticks_per_tick
             }
 
-            fn set_compare() {
-                unipmlemented!();
+            fn set_compare(instant: Self::Ticks) {
+                let ticks_per_tick = TICKS_PER_TICK.load(Ordering::Relaxed);
+                assert!(ticks_per_tick > 0, "monotonic not started");
+                let raw_now = unsafe { El1VirtualTimer::new().counter() };
+                let mut raw = instant.wrapping_mul(ticks_per_tick);
+                if raw <= raw_now {
+                    raw = raw_now.wrapping_add(ticks_per_tick);
+                }
+                unsafe { El1VirtualTimer::new().counter_compare_set(raw) };
             }
 
             fn clear_compare_flag() {
-                unipmlemented!();
+                let ticks_per_tick = TICKS_PER_TICK.load(Ordering::Relaxed);
+                if ticks_per_tick == 0 {
+                    return;
+                }
+                let now = unsafe { El1VirtualTimer::new().counter() };
+                unsafe {
+                    El1VirtualTimer::new().counter_compare_set(now.wrapping_add(ticks_per_tick));
+                }
             }
 
             fn pend_interrupt() {
-                unipmlemented!();
+                let mut vt = unsafe { El1VirtualTimer::new() };
+                vt.enable(true);
+                vt.interrupt_mask(false);
+                let now = vt.counter();
+                vt.counter_compare_set(now.wrapping_add(1));
             }
 
             fn enable_timer() {
-                unipmlemented!();
+                let mut vt = unsafe { El1VirtualTimer::new() };
+                vt.enable(true);
+                vt.interrupt_mask(false);
             }
 
             fn disable_timer() {
-                unipmlemented!();
+                let mut vt = unsafe { El1VirtualTimer::new() };
+                vt.interrupt_mask(true);
             }
 
-            fn on_interrupt() {
-                unipmlemented!();
-            }
-            
-            fn timer_queue() {
-                unimplemented!();
+            fn on_interrupt() {}
+
+            fn timer_queue() -> &'static TimerQueue<$backend_name> {
+                &$tq
             }
         }
     }
 }
 
 #[cfg(feature = "r52_virtual_timer")]
-make_timer!(VirtualTimerBackend, PLACE, u32, VIRTUAL_TIMER_OVERFLOWS, VIRTUAL_TIMER_TQ);
+make_timer!(
+    VirtualTimerBackend,
+    PLACE,
+    u32,
+    VIRTUAL_TIMER_OVERFLOWS,
+    VIRTUAL_TIMER_TQ
+);
